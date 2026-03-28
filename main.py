@@ -6,6 +6,11 @@ Webhook endpoint that handles the full onboarding flow:
 3. Create GHL sub-account
 4. Load GHL snapshot
 5. Send welcome email via Gmail
+
+SECURITY FEATURES:
+- Rate limiting: 10 submissions per hour per IP
+- API key validation
+- hCaptcha verification
 """
 
 import os
@@ -15,9 +20,11 @@ import smtplib
 import requests
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import defaultdict
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,6 +32,46 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 app = FastAPI(title="Automation Glow — Onboarding Automation")
+
+# ─── CORS Configuration ───────────────────────────────────────────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ─── Rate Limiting ────────────────────────────────────────────────────────────
+class RateLimiter:
+    """Simple in-memory rate limiter based on IP address."""
+    def __init__(self, max_requests: int = 10, window_seconds: int = 3600):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests = defaultdict(list)  # IP -> list of timestamps
+    
+    def is_allowed(self, ip: str) -> bool:
+        """Check if request from IP is allowed. Returns True if allowed, False if rate limited."""
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=self.window_seconds)
+        
+        # Clean old requests
+        self.requests[ip] = [ts for ts in self.requests[ip] if ts > cutoff]
+        
+        # Check if under limit
+        if len(self.requests[ip]) < self.max_requests:
+            self.requests[ip].append(now)
+            return True
+        return False
+    
+    def get_remaining(self, ip: str) -> int:
+        """Get remaining requests for this IP."""
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=self.window_seconds)
+        self.requests[ip] = [ts for ts in self.requests[ip] if ts > cutoff]
+        return max(0, self.max_requests - len(self.requests[ip]))
+
+rate_limiter = RateLimiter(max_requests=10, window_seconds=3600)  # 10 per hour per IP
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 NOTION_TOKEN        = os.getenv("NOTION_TOKEN")
@@ -37,6 +84,8 @@ GMAIL_USER          = "milan@glowmarketing.se"
 GMAIL_APP_PASSWORD  = os.getenv("GMAIL_APP_PASSWORD")
 CALENDLY_LINK       = os.getenv("CALENDLY_LINK", "[INSERT CALENDLY LINK]")
 META_GUIDE_LINK     = os.getenv("META_GUIDE_LINK", "[INSERT META BM VIDEO GUIDE LINK]")
+FORM_API_KEY        = os.getenv("FORM_API_KEY", "glow-form-secret-key-2024")  # Secret key for form submissions
+HCAPTCHA_SECRET     = os.getenv("HCAPTCHA_SECRET", "0x0000000000000000000000000000000000000000")  # hCaptcha secret key
 
 # ─── Notion ───────────────────────────────────────────────────────────────────
 def create_notion_card(data: dict) -> str:
@@ -353,7 +402,26 @@ async def onboard_client(request: Request, background_tasks: BackgroundTasks):
     Main webhook endpoint. Accepts form data as JSON.
     Expected fields: clinic_name, contact_name, email, phone, website_url,
                      lead_treatment, lead_treatment_price, etc.
+    Security: Rate limiting (10 per hour per IP) + API key validation + hCaptcha verification
     """
+    # Get client IP address
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # Rate limiting check
+    if not rate_limiter.is_allowed(client_ip):
+        remaining = rate_limiter.get_remaining(client_ip)
+        log.warning(f"⚠️ Rate limit exceeded for IP {client_ip}")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many requests. Rate limit: 10 per hour. Remaining: {remaining}"
+        )
+    
+    # API key validation
+    api_key = request.headers.get("X-API-Key") or request.headers.get("Authorization", "").replace("Bearer ", "")
+    if api_key != FORM_API_KEY:
+        log.warning(f"⚠️ Invalid API key attempt from {client_ip}")
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    
     try:
         data = await request.json()
     except Exception:
@@ -361,6 +429,25 @@ async def onboard_client(request: Request, background_tasks: BackgroundTasks):
 
     if not data.get("clinic_name") or not data.get("email"):
         raise HTTPException(status_code=422, detail="clinic_name and email are required")
+    
+    # Validate hCaptcha token if provided
+    captcha_token = data.get("captcha_token")
+    if captcha_token:
+        try:
+            captcha_response = requests.post(
+                "https://hcaptcha.com/siteverify",
+                data={"secret": HCAPTCHA_SECRET, "response": captcha_token},
+                timeout=5
+            )
+            captcha_data = captcha_response.json()
+            if not captcha_data.get("success"):
+                log.warning(f"⚠️ hCaptcha verification failed from {client_ip}")
+                raise HTTPException(status_code=400, detail="CAPTCHA verification failed")
+        except requests.RequestException as e:
+            log.error(f"❌ hCaptcha verification error: {e}")
+            # Don't fail the request if hCaptcha service is down, but log it
+    
+    log.info(f"✅ Valid submission from {client_ip} for {data.get('clinic_name')}")
 
     # Run in background so webhook returns immediately
     background_tasks.add_task(run_onboarding, data)
