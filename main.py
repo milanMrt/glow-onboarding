@@ -85,7 +85,7 @@ GMAIL_APP_PASSWORD  = os.getenv("GMAIL_APP_PASSWORD")
 CALENDLY_LINK       = os.getenv("CALENDLY_LINK", "[INSERT CALENDLY LINK]")
 META_GUIDE_LINK     = os.getenv("META_GUIDE_LINK", "[INSERT META BM VIDEO GUIDE LINK]")
 FORM_API_KEY        = os.getenv("FORM_API_KEY", "glow-form-secret-key-2024")  # Secret key for form submissions
-HCAPTCHA_SECRET     = os.getenv("HCAPTCHA_SECRET", "ES_11fe2d7e77ba4862878d371e8971d723")  # hCaptcha secret key
+HCAPTCHA_SECRET     = os.getenv("HCAPTCHA_SECRET")  # hCaptcha secret key - set via environment
 
 # ─── Notion ───────────────────────────────────────────────────────────────────
 def create_notion_card(data: dict) -> str:
