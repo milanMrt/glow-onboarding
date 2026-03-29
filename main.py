@@ -475,3 +475,8 @@ async def onboard_client_sync(request: Request):
 
     results = await run_onboarding(data)
     return JSONResponse(status_code=200, content=results)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
