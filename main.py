@@ -88,45 +88,43 @@ FORM_API_KEY        = os.getenv("FORM_API_KEY", "glow-form-secret-key-2024")  # 
 HCAPTCHA_SECRET     = os.getenv("HCAPTCHA_SECRET")  # hCaptcha secret key - set via environment
 
 # ─── Notion ───────────────────────────────────────────────────────────────────
-def create_notion_card(data: dict) -> str:
-    """Create a new client card in the Notion Client Portfolio database."""
-    url = "https://api.notion.com/v1/pages"
+def create_manus_entry(data: dict) -> str:
+    """Create a new client entry in the Manus database via webhook."""
+    url = "https://markdash-go5ugdcs.manus.space/api/webhooks/onboarding"
     headers = {
-        "Authorization": f"Bearer {NOTION_TOKEN}",
-        "Notion-Version": "2022-06-28",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "X-Webhook-Secret": os.getenv("MANUS_WEBHOOK_SECRET", "ef057189501ed90fca05b8adb0a51027a2ef9770bbf388520f1117e5c654a77a")
     }
     payload = {
-        "parent": {"database_id": NOTION_DB_ID},
-        "properties": {
-            "Company": {
-                "title": [{"text": {"content": data.get("clinic_name", "")}}]
-            },
-            "Email Address": {
-                "email": data.get("email")
-            },
-            "Phone Number": {
-                "phone_number": data.get("phone")
-            },
-            "Status": {
-                "select": {"name": "Active"}
-            },
-            "Onboarding date": {
-                "date": {"start": datetime.today().strftime("%Y-%m-%d")}
-            },
-            "Country": {
-                "select": {"name": "Sweden"}
-            },
-            "Client Sentiment": {
-                "select": {"name": "Happy"}
-            }
-        }
+        "clinic_name": data.get("clinic_name", ""),
+        "contact_name": data.get("contact_name", ""),
+        "email": data.get("email", ""),
+        "phone": data.get("phone", ""),
+        "business_age": data.get("business_age", ""),
+        "website_url": data.get("website_url", ""),
+        "instagram_handle": data.get("instagram_handle", ""),
+        "facebook_page_url": data.get("facebook_page_url", ""),
+        "meta_status": data.get("meta_status", ""),
+        "booking_system": data.get("booking_system", ""),
+        "main_treatments": data.get("main_treatments", ""),
+        "lead_treatment": data.get("lead_treatment", ""),
+        "lead_treatment_price": data.get("lead_treatment_price", ""),
+        "popular_package": data.get("popular_package", ""),
+        "practitioners": data.get("practitioners", ""),
+        "max_clients_per_day": data.get("max_clients_per_day", ""),
+        "calendar_fullness": data.get("calendar_fullness", ""),
+        "brand_colors": data.get("brand_colors", ""),
+        "logo_url": data.get("logo_url", ""),
+        "assets_drive_link": data.get("assets_drive_link", ""),
+        "company_name": data.get("company_name", ""),
+        "org_number": data.get("org_number", ""),
+        "billing_email": data.get("billing_email", ""),
+        "billing_address": data.get("billing_address", "")
     }
     r = requests.post(url, headers=headers, json=payload)
     r.raise_for_status()
-    page_id = r.json()["id"]
-    log.info(f"✅ Notion card created: {page_id}")
-    return page_id
+    log.info(f"✅ Manus entry created for: {data.get('clinic_name')}")
+    return "manus_entry_created"
 
 
 def update_notion_card(page_id: str, updates: dict):
@@ -334,27 +332,20 @@ async def run_onboarding(data: dict):
     log.info(f"🚀 Starting onboarding for: {clinic_name}")
     results = {"clinic_name": clinic_name, "steps": {}}
 
-    # Step 1: Notion card
+    # Step 1: Manus database entry
     try:
-        notion_page_id = create_notion_card(data)
-        results["steps"]["notion"] = {"status": "ok", "page_id": notion_page_id}
+        manus_entry = create_manus_entry(data)
+        results["steps"]["manus"] = {"status": "ok", "entry": manus_entry}
     except Exception as e:
-        log.error(f"❌ Notion failed: {e}")
-        results["steps"]["notion"] = {"status": "error", "error": str(e)}
-        notion_page_id = None
+        log.error(f"❌ Manus entry failed: {e}")
+        results["steps"]["manus"] = {"status": "error", "error": str(e)}
+        manus_entry = None
 
     # Step 2: Google Drive folders
     try:
         drive_link = setup_drive_folders(clinic_name)
         results["steps"]["google_drive"] = {"status": "ok", "link": drive_link}
-        # Update Notion card with Drive link
-        if notion_page_id:
-            try:
-                update_notion_card(notion_page_id, {
-                    "Google Drive": {"url": drive_link}
-                })
-            except Exception as e:
-                log.warning(f"⚠️ Could not update Notion with Drive link: {e}")
+        # Manus database will be updated via webhook if needed
     except Exception as e:
         log.error(f"❌ Google Drive failed: {e}")
         results["steps"]["google_drive"] = {"status": "error", "error": str(e)}
