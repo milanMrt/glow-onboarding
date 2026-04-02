@@ -220,26 +220,7 @@ def create_ghl_subaccount(data: dict) -> str:
     return location_id
 
 
-def load_ghl_snapshot(location_id: str):
-    """Push the standard snapshot into the new GHL sub-account via share link."""
-    # Step 1: Create a location-restricted share link for the snapshot
-    payload = {
-        "snapshot_id": GHL_SNAPSHOT_ID,
-        "share_type": "location_link",
-        "share_location_id": location_id
-    }
-    r = requests.post(
-        f"https://services.leadconnectorhq.com/snapshots/share/link?companyId={GHL_COMPANY_ID}",
-        headers=GHL_HEADERS,
-        json=payload
-    )
-    r.raise_for_status()
-    share_data = r.json()
-    share_link = share_data.get("shareLink", "")
-    log.info(f"✅ GHL snapshot share link created: {share_link} for location: {location_id}")
-    # Note: The share link is location-restricted — the sub-account can load it directly.
-    # For full automation, the snapshot can also be loaded via the GHL UI using this link.
-    return share_link
+# Snapshot loading removed - not needed
 
 
 # ─── Email ────────────────────────────────────────────────────────────────────
@@ -368,16 +349,7 @@ async def run_onboarding(data: dict):
         results["steps"]["ghl_account"] = {"status": "error", "error": str(e)}
         location_id = None
 
-    # Step 4: GHL snapshot
-    if location_id:
-        try:
-            share_link = load_ghl_snapshot(location_id)
-            results["steps"]["ghl_snapshot"] = {"status": "ok", "share_link": share_link}
-        except Exception as e:
-            log.error(f"❌ GHL snapshot failed: {e}")
-            results["steps"]["ghl_snapshot"] = {"status": "error", "error": str(e)}
-
-    # Step 5: Welcome email
+    # Step 4: Welcome email
     try:
         send_welcome_email(data, drive_link)
         results["steps"]["welcome_email"] = {"status": "ok"}
