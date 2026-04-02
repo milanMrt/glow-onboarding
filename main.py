@@ -140,38 +140,46 @@ def update_notion_card(page_id: str, updates: dict):
     log.info(f"✅ Notion card updated: {page_id}")
 
 
-# ─── Google Drive (via rclone OAuth token) ───────────────────────────────────
-import re as _re
+# ─── Google Drive (via Service Account) ──────────────────────────────────────
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
-RCLONE_CONFIG_PATH = os.getenv("RCLONE_CONFIG_PATH", "/home/ubuntu/.gdrive-rclone.ini")
+GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT")
 
-def get_drive_token() -> str:
-    """Read the current OAuth access token from the rclone config file."""
-    with open(RCLONE_CONFIG_PATH) as f:
-        content = f.read()
-    match = _re.search(r'token = (.+)', content)
-    if not match:
-        raise RuntimeError("Could not find OAuth token in rclone config")
-    token_data = json.loads(match.group(1))
-    return token_data["access_token"]
+def get_drive_service():
+    """Get Google Drive service using Service Account credentials."""
+    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT environment variable not set")
+    
+    try:
+        creds_dict = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+    except json.JSONDecodeError:
+        raise RuntimeError("Invalid GOOGLE_SERVICE_ACCOUNT JSON")
+    
+    credentials = service_account.Credentials.from_service_account_info(
+        creds_dict,
+        scopes=["https://www.googleapis.com/auth/drive"]
+    )
+    return build("drive", "v3", credentials=credentials)
 
 
 def drive_create_folder(name: str, parent_id: str) -> tuple[str, str]:
-    """Create a folder in Google Drive using the rclone OAuth token. Returns (id, link)."""
-    token = get_drive_token()
-    resp = requests.post(
-        "https://www.googleapis.com/drive/v3/files",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json={"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]}
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if "error" in data:
-        raise RuntimeError(f"Drive API error: {data['error']['message']}")
-    folder_id = data["id"]
-    web_link = f"https://drive.google.com/drive/folders/{folder_id}"
-    log.info(f"✅ Drive folder created: {name} ({folder_id})")
-    return folder_id, web_link
+    """Create a folder in Google Drive using Service Account. Returns (id, link)."""
+    try:
+        service = get_drive_service()
+        file_metadata = {
+            "name": name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_id]
+        }
+        folder = service.files().create(body=file_metadata, fields="id").execute()
+        folder_id = folder.get("id")
+        web_link = f"https://drive.google.com/drive/folders/{folder_id}"
+        log.info(f"✅ Drive folder created: {name} ({folder_id})")
+        return folder_id, web_link
+    except Exception as e:
+        log.error(f"❌ Google Drive failed: {e}")
+        raise
 
 
 def setup_drive_folders(clinic_name: str) -> str:
