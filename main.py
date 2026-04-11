@@ -349,13 +349,26 @@ async def run_onboarding(data: dict):
         results["steps"]["ghl_account"] = {"status": "error", "error": str(e)}
         location_id = None
 
-    # Step 4: Welcome email
+    # Step 4: Send to Make webhook for email
     try:
-        send_welcome_email(data, drive_link)
-        results["steps"]["welcome_email"] = {"status": "ok"}
+        make_webhook_url = "https://hook.eu2.make.com/nrfddlbc6dm1acup8c4v5gbykkzw182f"
+        webhook_payload = {
+            "clinic_name": data.get("clinic_name"),
+            "contact_name": data.get("contact_name"),
+            "email": data.get("email"),
+            "phone": data.get("phone"),
+            "drive_link": drive_link,
+            "location_id": location_id,
+            "website_url": data.get("website_url"),
+            "instagram_handle": data.get("instagram_handle")
+        }
+        webhook_response = requests.post(make_webhook_url, json=webhook_payload, timeout=5)
+        webhook_response.raise_for_status()
+        log.info(f"✅ Make webhook triggered for email")
+        results["steps"]["make_webhook"] = {"status": "ok"}
     except Exception as e:
-        log.error(f"❌ Welcome email failed: {e}")
-        results["steps"]["welcome_email"] = {"status": "error", "error": str(e)}
+        log.error(f"❌ Make webhook failed: {e}")
+        results["steps"]["make_webhook"] = {"status": "error", "error": str(e)}
 
     log.info(f"✅ Onboarding complete for: {clinic_name}")
     return results
