@@ -86,6 +86,7 @@ CALENDLY_LINK       = os.getenv("CALENDLY_LINK", "[INSERT CALENDLY LINK]")
 META_GUIDE_LINK     = os.getenv("META_GUIDE_LINK", "[INSERT META BM VIDEO GUIDE LINK]")
 FORM_API_KEY        = os.getenv("FORM_API_KEY", "glow-form-secret-key-2024")  # Secret key for form submissions
 HCAPTCHA_SECRET     = os.getenv("HCAPTCHA_SECRET")  # hCaptcha secret key - set via environment
+SLACK_WEBHOOK_URL   = os.getenv("SLACK_WEBHOOK_URL")  # Slack incoming webhook for booking notifications
 
 # ─── Notion ───────────────────────────────────────────────────────────────────
 def create_manus_entry(data: dict) -> str:
@@ -314,6 +315,64 @@ def send_welcome_email(data: dict, drive_link: str):
     log.info(f"✅ Welcome email sent to {to_email}")
 
 
+# ─── Slack Notifications ─────────────────────────────────────────────────────
+def send_slack_notification(message: dict) -> bool:
+    """Send a notification to Slack via incoming webhook."""
+    if not SLACK_WEBHOOK_URL:
+        log.warning("⚠️ SLACK_WEBHOOK_URL not configured, skipping notification")
+        return False
+
+    try:
+        r = requests.post(SLACK_WEBHOOK_URL, json=message, timeout=10)
+        r.raise_for_status()
+        log.info("✅ Slack notification sent")
+        return True
+    except Exception as e:
+        log.error(f"❌ Slack notification failed: {e}")
+        return False
+
+
+def format_booking_slack_message(data: dict) -> dict:
+    """Format a GHL calendar booking into a Slack message."""
+    contact_name = data.get("contact_name") or data.get("full_name") or data.get("name") or "Unknown"
+    contact_email = data.get("email") or data.get("contact_email") or "N/A"
+    contact_phone = data.get("phone") or data.get("contact_phone") or "N/A"
+    calendar_name = data.get("calendar_name") or data.get("calendarName") or "Calendar"
+    appointment_time = data.get("start_time") or data.get("startTime") or data.get("appointment_time") or "N/A"
+    appointment_date = data.get("date") or data.get("selectedDate") or ""
+    notes = data.get("notes") or data.get("additionalNotes") or ""
+
+    if appointment_date and appointment_time and "T" not in str(appointment_time):
+        display_time = f"{appointment_date} at {appointment_time}"
+    else:
+        display_time = appointment_time
+
+    blocks = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": "📅 New Call Booked!", "emoji": True}
+        },
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Name:*\n{contact_name}"},
+                {"type": "mrkdwn", "text": f"*Calendar:*\n{calendar_name}"},
+                {"type": "mrkdwn", "text": f"*Email:*\n{contact_email}"},
+                {"type": "mrkdwn", "text": f"*Phone:*\n{contact_phone}"},
+                {"type": "mrkdwn", "text": f"*When:*\n{display_time}"}
+            ]
+        }
+    ]
+
+    if notes:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Notes:*\n{notes}"}
+        })
+
+    return {"blocks": blocks}
+
+
 # ─── Main Onboarding Flow ─────────────────────────────────────────────────────
 async def run_onboarding(data: dict):
     """Execute the full onboarding sequence."""
@@ -459,6 +518,32 @@ async def onboard_client_sync(request: Request):
 
     results = await run_onboarding(data)
     return JSONResponse(status_code=200, content=results)
+
+
+@app.post("/webhook/ghl-booking")
+async def ghl_booking_webhook(request: Request):
+    """
+    Webhook endpoint for GoHighLevel calendar bookings.
+    When a call is booked in GHL, this sends a notification to Slack.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    log.info(f"📅 GHL booking webhook received: {json.dumps(data, default=str)[:500]}")
+
+    slack_message = format_booking_slack_message(data)
+    success = send_slack_notification(slack_message)
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "ok",
+            "slack_notified": success,
+            "message": "Booking notification processed"
+        }
+    )
 
 
 if __name__ == "__main__":
